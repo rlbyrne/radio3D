@@ -74,6 +74,17 @@ def get_baselines():
     return bl_coords
 
 
+def get_u(
+    freq_hz=30e6,
+):
+
+    bl_coords = get_baselines()
+    c = 3e8
+    wl = c / freq_hz
+    u_vals = bl_coords / wl
+    return u_vals
+
+
 def get_pixel_coords(nside):
 
     npix = healpy.nside2npix(nside)
@@ -89,57 +100,66 @@ def get_pixel_coords(nside):
 
 
 def simulate_visibilities(
-    bl_coords,  # Shape (3, n_blts,)
+    u_vals,  # Shape (3, n_blts,)
     pixel_vals,  # Shape (npix,)
 ):
-    n_blts = np.shape(bl_coords)[1]
+    n_blts = np.shape(u_vals)[1]
     nside = healpy.npix2nside(len(pixel_vals))
     pixel_coords = get_pixel_coords(nside)
     visibilities = np.zeros(n_blts, dtype=complex)
     for pixel_ind in np.where(pixel_vals != 0):
         visibilities += pixel_vals[pixel_ind] * np.exp(
-            2 * np.pi * 1j * np.sum(pixel_coords[:, pixel_ind] * bl_coords, axis=0)
+            2 * np.pi * 1j * np.sum(pixel_coords[:, pixel_ind] * u_vals, axis=0)
         )
     return visibilities
 
 
 def spherical_harmonic_imaging(
     visibilities,
-    bl_coords,
+    u_vals,
     l_max,
 ):
-    l_vals, m_vals = healpy.sphtfunc.Alm.getlm(l_max)
+    l_vals = []
+    m_vals = []
+    for l in range(l_max + 1):
+        for m in range(-l, l + 1):
+            l_vals.append(l)
+            m_vals.append(m)
+    l_vals = np.array(l_vals)
+    m_vals = np.array(m_vals)
+
     alms = np.zeros(len(l_vals), dtype=complex)
     for blt_ind in range(len(visibilities)):
-        bl_length = np.sqrt(np.sum(np.abs(bl_coords[:, blt_ind]) ** 2.0))
-        theta = np.arccos(bl_coords[2, blt_ind] / bl_length)  # Polar angle
-        phi = np.sign(bl_coords[1, blt_ind]) * np.arccos(
-            bl_coords[0, blt_ind]
+        bl_length = np.sqrt(np.sum(np.abs(u_vals[:, blt_ind]) ** 2.0))
+        theta = np.arccos(u_vals[2, blt_ind] / bl_length)  # Polar angle
+        phi = np.sign(u_vals[1, blt_ind]) * np.arccos(
+            u_vals[0, blt_ind]
             / np.sqrt(
-                np.abs(bl_coords[0, blt_ind]) ** 2.0
-                + np.abs(bl_coords[1, blt_ind]) ** 2.0
+                np.abs(u_vals[0, blt_ind]) ** 2.0
+                + np.abs(u_vals[1, blt_ind]) ** 2.0
             )
         )  # Azimuthal angle
         alms += (
-            np.conj(
-                (-1j) ** l_vals
-                * scipy.special.spherical_jn(l_vals, bl_length)
-                * scipy.special.sph_harm(m_vals, l_vals, phi, theta)
+            4
+            * np.pi
+            * (1j) ** l_vals
+            * scipy.special.spherical_jn(l_vals, 2 * np.pi * bl_length)
+            * (
+                visibilities[blt_ind]
+                * np.conj(
+                    scipy.special.sph_harm(m_vals, l_vals, phi + np.pi, np.pi - theta)
+                )
+                + np.conj(visibilities[blt_ind])
+                * np.conj(scipy.special.sph_harm(m_vals, l_vals, phi, theta))
             )
-            * visibilities[blt_ind]
         )
-        +np.conj(
-            (-1j) ** l_vals
-            * scipy.special.spherical_jn(l_vals, bl_length)
-            * scipy.special.sph_harm(m_vals, l_vals, phi + np.pi, np.pi - theta)
-        ) * np.conj(visibilities[blt_ind])
 
     return alms, l_vals, m_vals
 
 
 def pixel_based_imaging(
     visibilities,
-    bl_coords,
+    u_vals,
     nside,
 ):
     pixel_coords = get_pixel_coords(nside)
@@ -151,7 +171,7 @@ def pixel_based_imaging(
                 -2
                 * np.pi
                 * 1j
-                * np.sum(pixel_coords * bl_coords[:, visiblity_ind, np.newaxis], axis=0)
+                * np.sum(pixel_coords * u_vals[:, visiblity_ind, np.newaxis], axis=0)
             )
         )
     return pixel_vals
